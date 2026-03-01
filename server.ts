@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { db } from "./src/database.ts";
 import dotenv from "dotenv";
-import path from "path"; // Aggiunto per gestire i percorsi
+import path from "path";
 import { fileURLToPath } from "url";
 
 dotenv.config();
@@ -44,7 +44,7 @@ async function startServer() {
       const userCount = await db.getOne('SELECT COUNT(*) as count FROM users');
       res.json({ status: "ok", db: "connected", users: userCount.count });
     } catch (e) {
-      res.status(500).json({ status: "error", message: "DB Connection failed" });
+      res.status(500).json({ status: "error" });
     }
   });
 
@@ -52,9 +52,13 @@ async function startServer() {
     const { name, email, password } = req.body;
     const hashedPassword = await bcrypt.hash(password, 10);
     try {
-      // Nota: Per PostgreSQL il placeholder è $1, $2, etc. Se db.run lo gestisce ok, altrimenti usa $1
-      const result = await db.run('INSERT INTO users (name, email, password) VALUES ($1, $2, $3) RETURNING id', [name, email, hashedPassword]);
-      res.json({ id: result.id });
+      // Usiamo $1, $2 per Postgres e RETURNING id per ottenere l'ID inserito
+      const result = await db.run(
+        'INSERT INTO users (name, email, password) VALUES ($1, $2, $3) RETURNING id', 
+        [name, email, hashedPassword]
+      );
+      // Correzione errore TS2339: accediamo all'id in modo sicuro per Postgres
+      res.json({ id: (result as any).id || (result as any).lastInsertRowid });
     } catch (e) {
       res.status(400).json({ error: "Email already exists" });
     }
@@ -84,7 +88,6 @@ async function startServer() {
     res.json(members);
   });
 
-  // --- Class Routes ---
   app.get("/api/classes", authenticate, async (req, res) => {
     const classes = await db.getAll(`
       SELECT c.*, u.name as instructor_name, 
@@ -95,19 +98,15 @@ async function startServer() {
     res.json(classes);
   });
 
-  // --- Gestione Produzione (FRONTEND) ---
+  // --- Gestione Produzione (Static Files) ---
   if (process.env.NODE_ENV === "production") {
-    // Serve i file statici dalla cartella 'dist' (creata da Vite)
     const distPath = path.join(__dirname, "dist");
     app.use(express.static(distPath));
-
-    // Gestisce il routing delle Single Page Application (SPA)
     app.get("*", (req, res, next) => {
       if (req.path.startsWith('/api')) return next();
       res.sendFile(path.join(distPath, "index.html"));
     });
   } else {
-    // Vite middleware per lo sviluppo locale
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -115,15 +114,12 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  // --- Avvio Server ---
   app.listen(Number(PORT), "0.0.0.0", () => {
-    console.log(`🚀 FRENKYFIT Server listening on port ${PORT}`);
-    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🚀 Server listening on port ${PORT}`);
   });
 }
 
-// Avvio con gestione errori migliorata per non far crashare Render
 startServer().catch(err => {
-  console.error("❌ CRITICAL ERROR: Failed to start server:", err);
+  console.error("Failed to start server:", err);
   process.exit(1);
 });
